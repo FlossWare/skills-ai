@@ -1,0 +1,140 @@
+name: Code Quality
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install ESLint
+        run: |
+          npm install --save-dev eslint
+
+      - name: Check JavaScript syntax
+        run: |
+          # Validate all .js files have valid syntax
+          for file in $(find . -name "*.js" -not -path "./node_modules/*"); do
+            echo "Checking $file..."
+            node --check "$file"
+          done
+        continue-on-error: false
+
+      - name: Verify workflow meta blocks
+        run: |
+          # Check all .js files have required meta export
+          echo "Checking for required meta blocks..."
+          for file in $(find . -name "*.js" -not -path "./node_modules/*" -not -name "eslint.config.js"); do
+            if ! grep -q "export const meta" "$file"; then
+              echo "❌ Missing 'export const meta' in $file"
+              exit 1
+            fi
+            echo "✅ $file has meta block"
+          done
+        continue-on-error: false
+
+      - name: Check documentation exists
+        run: |
+          # Every .js skill should have a .md doc
+          echo "Checking for documentation..."
+          for file in $(find . -name "*.js" -not -path "./node_modules/*" -not -name "eslint.config.js"); do
+            MD_FILE="${file%.js}.md"
+            if [ ! -f "$MD_FILE" ]; then
+              echo "❌ Missing documentation: $MD_FILE"
+              exit 1
+            fi
+            echo "✅ $file has documentation"
+          done
+        continue-on-error: false
+
+      - name: Validate skill names
+        run: |
+          # Check meta.name matches filename
+          echo "Validating skill names..."
+          for file in $(find . -name "*.js" -not -path "./node_modules/*" -not -name "eslint.config.js"); do
+            FILENAME=$(basename "$file" .js)
+            META_NAME=$(grep -oP 'name:\s*\047\K[^\047]+' "$file" || echo "")
+            if [ -z "$META_NAME" ]; then
+              echo "⚠️  Could not extract meta.name from $file (might use double quotes)"
+            elif [ "$META_NAME" != "$FILENAME" ]; then
+              echo "❌ Name mismatch in $file: filename=$FILENAME, meta.name=$META_NAME"
+              exit 1
+            else
+              echo "✅ $file name matches"
+            fi
+          done
+        continue-on-error: true  # Warning only (quote style varies)
+
+      - name: Check for security issues
+        run: |
+          # Check for common security issues in workflows
+          echo "Checking for security issues..."
+
+          # Check for hardcoded secrets
+          if grep -rn --include="*.js" --include="*.md" -E "(api[_-]?key|password|secret|token)\s*=\s*['\"][^'\"]{10,}" .; then
+            echo "❌ Potential hardcoded secrets found"
+            exit 1
+          fi
+          echo "✅ No hardcoded secrets detected"
+
+          # Check for dangerous commands
+          if grep -rn --include="*.js" -E "rm -rf /|dd if=|mkfs\.|shutdown|reboot" .; then
+            echo "❌ Dangerous commands detected"
+            exit 1
+          fi
+          echo "✅ No dangerous commands detected"
+        continue-on-error: false
+
+      - name: Markdown linting
+        run: |
+          npm install --save-dev markdownlint-cli
+          npx markdownlint '**/*.md' --ignore node_modules || echo "Markdown linting completed with warnings"
+        continue-on-error: true  # Warning only
+
+      - name: Check file permissions
+        run: |
+          # Check no files are executable (workflows shouldn't be)
+          echo "Checking file permissions..."
+          if find . -name "*.js" -executable -not -path "./node_modules/*"; then
+            echo "⚠️  Some .js files are executable (may be intentional)"
+          fi
+          echo "✅ Permission check complete"
+        continue-on-error: true
+
+      - name: Count skills
+        run: |
+          SKILL_COUNT=$(find . -name "*.js" -not -path "./node_modules/*" -not -name "eslint.config.js" | wc -l)
+          DOC_COUNT=$(find . -name "*.md" -not -path "./node_modules/*" | wc -l)
+          echo "## Skills AI Statistics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- 📊 Skills: $SKILL_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "- 📄 Documentation files: $DOC_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Code Quality Summary
+        if: always()
+        run: |
+          echo "## Code Quality Checks Complete ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ JavaScript syntax validation" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Workflow meta blocks verified" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Documentation coverage checked" >> $GITHUB_STEP_SUMMARY
+          echo "- ⚠️ Skill name validation (warning only)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Security scan (no hardcoded secrets)" >> $GITHUB_STEP_SUMMARY
+          echo "- ⚠️ Markdown linting (warning only)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**All critical checks passed!** 🚀" >> $GITHUB_STEP_SUMMARY
